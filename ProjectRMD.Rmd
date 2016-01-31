@@ -1,0 +1,134 @@
+---
+title: "Machine Learning Project"
+author: OilGasDataAnalyst
+output: html_document
+---
+
+##Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of 
+data about personal activity relatively inexpensively. These type of devices are part of the quantified self
+movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find
+patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much
+of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be
+to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to
+perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website
+here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har. 
+
+##Review the data
+
+First we load up the librarys required
+```{r, cache=TRUE,warning=FALSE}
+library(caret)
+library(doMC)
+```
+
+Then set up the training and test sets. We also set any NA's to blank.
+```{r, cache=TRUE}
+testing <- read.csv("pml-testing.csv", na.strings=c("NA",""), header=TRUE)
+training <- read.csv("pml-training.csv", na.strings=c("NA",""), header=TRUE)
+```
+
+Lets take a look at the data `head(training)`, I wont display it here as its a lot of columns but after reviewing the data it was determined that the 1st 7 columns are not needed as they are simply timestamps and user info.
+
+So lets go ahead and take out the 1st 7 columns by resetting training & testing to columns 8 and above.
+```{r,cache=TRUE}
+#remove 1st 7 cols
+testing <- testing[,8:length(colnames(testing))]
+training <- training[,8:length(colnames(training))]
+```
+
+My first pass with the data & training resulted in incredibly long load times and lots of aggrivation. After 
+reading through the forums it was discovered that a lot of the NA data can be elminiated as the data that exist 
+isnt enough (considering the data is 19622 observations) and if one variable only has 1 observation this is what
+was causing my long load & calculation times. Some further reading I came across the ingenious method of checking
+the columns.
+
+First we give the column names and set up the function that counts the number of items which are NOT NA (!NA)
+```{r, cache=TRUE}
+columnNames <- colnames(training)
+
+nonNAs <- function(x) {
+  as.vector(apply(x, 2, function(x) length(which(!is.na(x)))))
+}
+```
+
+We then run the function and loop through each column, if the number of non-NAs is less than the actual dataset itself `colcnts[cnt] < nrow(training)` then we add that column name to the `drops` variable.
+```{r,cache=TRUE}
+colcnts <- nonNAs(training)
+
+drops <- c()
+for (cnt in 1:length(colcnts)) {
+  if (colcnts[cnt] < nrow(training)) {
+    drops <- c(drops, columnNames[cnt])
+  }
+}
+```
+
+We now simply drop those columns and reset the training & testing set.
+```{r,cache=TRUE}
+testing <- testing[,!(names(testing) %in% drops)]
+training <- training[,!(names(training) %in% drops)]
+```
+
+There is also the option of using the `nearZeroVar` function in the `caret` package however I personally couldnt get this to work. I believe it was due to setting some variables as a factor...?? however end of the day it was too much frustration for not a lot of accomplishment. With online examples I was able to get it to work however with this data set there was/is clearly something I'm doing wrong.
+
+##Training
+
+We can now start training the data! However before we start this we need to create a partition of the training set so we can check everything. I'm splitting the data 60/40 and creating two new variables called `training60` & `testing40`.
+```{r, cache=TRUE}
+set.seed(999)
+inTrain <- createDataPartition(training$classe, p=0.6, list=FALSE)
+training60 <- training[inTrain,]
+testing40 <- training[-inTrain,]
+```
+
+Due to my extreme run times (before I removed a lot of the NA columns) I was experimenting with using multiple cores to run R. End of the day this did speed up the run time however it seemed to put my computer into overdrive when I used 7 cores, one less than total cores as reccomended. I eneded up using 4 cores with decent results.
+```{r, cache=TRUE}
+#use multiple cores for increased speed in processing
+detectCores() #detect cores, I have 8 use half of them
+registerDoMC(cores = 4) 
+```
+
+Now we can finally run the model!! First we will do a Random Forest and fit it to our training set.
+```{r, cache=TRUE,warning=FALSE, echo=FALSE}
+modFitRandomForest <- train(classe ~.,data = training60, method = "rf", prox = TRUE,trControl=trainControl(method = "cv", number = 4,verboseIter = TRUE))
+```
+
+```{r,cache=TRUE}
+predictionsRF <- predict(modFitRandomForest, newdata=testing40)
+print(modFitRandomForest)
+```
+
+And the moment of truth to see how close our predidtions are! And wow, very accurate, 99.15%, would be pretty hard to beat that but lets go ahead and try another model.
+```{r,cache=TRUE}
+print(confusionMatrix(predictionsRF, testing40$classe), digits=4)
+```
+
+
+Lets try out a KNN model.
+```{r,cache=TRUE}
+#knn
+ctrlKNN = trainControl(method = "adaptive_cv")
+modFitKNN <- train(classe ~.,data = training60, method = "knn", trControl = ctrlKNN)
+predictionsKNN <- predict(modFitKNN, newdata=testing40)
+```
+
+And the results are not as good, 89.09%.
+```{r,cache=TRUE}
+print(confusionMatrix(predictionsKNN, testing40$classe), digits=4)
+```
+
+Lets see what KNN predicts.
+```{r,cache=TRUE}
+print(predict(modFitKNN, newdata=testing))
+```
+
+And what Random Forest Predicts
+```{r,cache=TRUE}
+print(predict(modFitRandomForest, newdata=testing))
+```
+
+As you can see both are nearly the same predictions with the exception of one letter (D vs C), for my final submission I'll go ahead and use the Random Forest predictions.
